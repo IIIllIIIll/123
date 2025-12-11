@@ -1,0 +1,92 @@
+根据您提供的日志，问题非常明确：
+
+**`WARNING - ... 中未找到有效节点`**
+
+这个错误日志意味着您的 `cfg_feature_extractor.py` 脚本在加载 JSON 文件后，无法在其中找到名为 `global_nodes` 的键，或者该键对应的值是一个空列表。
+
+### 问题根源：键名不匹配
+
+您在 `CFG` 文档 中定义的 JSON 结构示例使用的是 `nodes` 和 `edges` 键：
+
+```json
+{
+  "nodes": [ ... ],
+  "edges": [ ... ]
+}
+```
+
+然而，您的 `cfg_feature_extractor.py` 脚本中的函数（如 `build_node_mapping` 和 `construct_edge_index`）**默认查找的是 `global_nodes` 和 `global_edges` 键**。
+
+当脚本（特别是 `build_node_mapping` 函数）尝试访问 `data.get('global_nodes', [])` 时，它返回了一个空列表，导致 `num_nodes` 为 0，从而触发了您在 `process_single_cfg` 函数中设置的 `ValueError("未找到有效节点")` 异常，最终被日志系统捕获为警告。
+
+### 解决方案：修改 `cfg_feature_extractor.py`
+
+您需要编辑 `cfg_feature_extractor.py` 脚本，**使其在调用核心处理函数时，使用正确的键名（`nodes` 和 `edges`）**，而不是默认的 `global_nodes` 和 `global_edges`。
+
+请打开 `cfg_feature_extractor.py` 文件，找到 `process_single_cfg` 函数（根据上下文，它应该在 **200行** 附近），并进行如下修改：
+
+**修改前的（推测）代码：**
+
+```python
+def process_single_cfg(json_path: Path, model: 'fasttext.FastText') -> Optional[Data]:
+    """
+    处理单个CFG JSON文件。
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # 1. 节点映射 (问题点：使用默认键 'global_nodes')
+        node_mapping, num_nodes = build_node_mapping(data) 
+        
+        if num_nodes == 0:
+            raise ValueError("未找到有效节点") # 这就是触发日志警告的地方
+
+        # 2. 边索引 (问题点：使用默认键 'global_edges')
+        edge_index = construct_edge_index(data, node_mapping) 
+        
+        # 3. 特征矩阵 (问题点：使用默认键 'global_nodes')
+        feature_matrix = construct_feature_matrix(model, node_mapping, data)
+        
+        # ... (后续代码)
+```
+
+**修改后的（解决方案）代码：**
+
+```python
+def process_single_cfg(json_path: Path, model: 'fasttext.FastText') -> Optional[Data]:
+    """
+    处理单个CFG JSON文件。
+    """
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # --- 修正开始 ---
+        # 明确指定您的JSON文件实际使用的键名
+        nodes_key_name = 'nodes'
+        edges_key_name = 'edges'
+        # --- 修正结束 ---
+
+        # 1. 节点映射 (修正：传入正确的 'nodes_key_name')
+        node_mapping, num_nodes = build_node_mapping(data, global_nodes_key=nodes_key_name) 
+        
+        if num_nodes == 0:
+            # (可选) 更新错误信息，使其更明确
+            raise ValueError(f"未找到有效节点 (JSON中未找到 '{nodes_key_name}' 键或其列表为空)")
+
+        # 2. 边索引 (修正：传入正确的 'edges_key_name')
+        edge_index = construct_edge_index(data, node_mapping, global_edges_key=edges_key_name) 
+        
+        # 3. 特征矩阵 (修正：传入正确的 'nodes_key_name')
+        # 注意：construct_feature_matrix 也需要这个键名来查找节点
+        feature_matrix = construct_feature_matrix(model, node_mapping, data, global_nodes_key=nodes_key_name)
+        
+        # ... (后续代码)
+```
+
+### 总结
+
+您只需要在 `process_single_cfg` 函数中，将\*\*`'nodes'`\*\* 和 **`'edges'`** 作为参数传递给 `build_node_mapping`、`construct_edge_index` 和 `construct_feature_matrix` 这三个函数即可。
+
+进行此修改后，脚本将能够正确解析您的 JSON 文件，处理将不再失败。
